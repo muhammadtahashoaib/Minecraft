@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>MiniCraft</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Arial, sans-serif; cursor: none; user-select: none; }
+        #cross { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-size: 24px; z-index: 10; pointer-events: none; }
+        .menu-active { cursor: default !important; }
+        .menu-active #cross { display: none; }
+
+        /* Hotbar */
+        #hotbar { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 4px; background: rgba(0,0,0,0.7); padding: 6px; border: 2px solid #444; z-index: 10; }
+        .slot { width: 50px; height: 50px; border: 2px solid #555; background: rgba(255,255,255,0.1); position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden;}
+        .slot.active { border-color: #fff; background: rgba(255,255,255,0.3); }
+        .count { position: absolute; bottom: 2px; right: 4px; color: #fff; font-size: 12px; font-weight: bold; z-index: 2;}
+        .item-icon { width: 100%; height: 100%; pointer-events: none; background-size: cover; image-rendering: pixelated;}
+
+        /* Menus */
+        #inventoryScreen, #pauseMenu, #settingsPanel {
+            display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: #252525; color: white; padding: 25px; border: 4px solid #555; z-index: 100; text-align: center; min-width: 300px;
+        }
+        .inv-grid { display: grid; grid-template-columns: repeat(9, 54px); gap: 6px; margin-bottom: 20px; }
+        #trashSlot { width: 54px; height: 54px; border: 2px solid #f44; background: rgba(244, 67, 54, 0.2); display: flex; align-items: center; justify-content: center; margin-left: auto; font-size: 24px; }
+        button { margin: 10px; padding: 10px 20px; cursor: pointer; background: #444; color: white; border: 1px solid #fff; border-radius: 5px; width: 80%; }
+        #panel { position: fixed; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.6); padding: 10px; border-radius: 4px; font-size: 12px; z-index: 5; }
+        input[type=range] { width: 100%; }
+    </style>
+</head>
+<body id="gameBody">
+
+<div id="cross">+</div>
+<div id="panel"><b>Player & Controls</b><br>E: Inventory | ESC: Settings<br>L-Click: Break | R-Click: Place<br> WASD movement<br>Spcae: Jump | Hotbar (1–9 keys)</div>
+
+<div id="hotbar"></div>
+
+<div id="inventoryScreen">
+    <h3>Inventory</h3>
+    <div class="inv-grid" id="mainInv"></div>
+    <div style="display:flex; align-items:center;">
+        <div class="inv-grid" id="hotbarInv" style="margin-bottom:0"></div>
+        <div id="trashSlot" ondrop="dropToTrash(event)" ondragover="event.preventDefault()">🗑️</div>
+    </div>
+    <br><button onclick="toggleInventory()">Back</button>
+</div>
+
+<div id="pauseMenu">
+    <h2>Game Paused</h2>
+    <button onclick="resumeGame()">Resume Game</button><br>
+    <button onclick="openSettings()">Settings</button>
+</div>
+
+<div id="settingsPanel">
+    <h2>Settings</h2>
+    <label>Day-Night Speed</label><br>
+    <input type="range" id="speedSlider" min="0" max="0.02" step="0.0005" value="0.002"><br><br>
+    <label>Mouse Sensitivity</label><br>
+    <input type="range" id="sensSlider" min="0.0005" max="0.01" step="0.0005" value="0.002"><br><br>
+    <button onclick="closeSettings()">Back</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+/* ================= ASSETS & CONFIG ================= */
+const loader = new THREE.TextureLoader();
+const textures = {
+    grass: 'https://threejs.org/examples/textures/minecraft/grass.png',
+    wood: 'https://threejs.org/examples/textures/crate.gif'
+};
+
+function getMat(color, url) {
+    if(url) {
+        const tex = loader.load(url); tex.magFilter = THREE.NearestFilter;
+        return new THREE.MeshLambertMaterial({ map: tex, color: color });
+    }
+    return new THREE.MeshLambertMaterial({ color: color });
+}
+
+const items = {
+    grass: { id: 'grass', mat: getMat(0x55aa55, textures.grass), img: textures.grass },
+    wood: { id: 'wood', mat: getMat(0x8b5a2b, textures.wood), img: textures.wood },
+    sand: { id: 'sand', mat: getMat(0xd2b48c), img: '' }
+};
+
+let hotbarData = [{id:'grass', count:64}, {id:'wood', count:10}, {id:'sand', count:64}, null, null, null, null, null, null];
+let mainInvData = Array(27).fill(null);
+let selected = 0; let paused = false;
+
+/* ================= ENGINE ================= */
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000);
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const sunLight = new THREE.DirectionalLight(0xffffff, 1.0); scene.add(sunLight);
+const ambLight = new THREE.AmbientLight(0xffffff, 0.3); scene.add(ambLight);
+
+/* ================= PLAYER HAND & ARM ================= */
+const handGroup = new THREE.Group();
+const armMat = new THREE.MeshLambertMaterial({ color: 0xe0ac69 });
+const arm = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 1.2), armMat);
+arm.position.set(0.7, -0.6, -0.8);
+arm.rotation.x = -0.2;
+handGroup.add(arm);
+
+// Block in hand
+let heldBlock = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), items.grass.mat);
+heldBlock.position.set(0.7, -0.4, -1.2);
+handGroup.add(heldBlock);
+
+camera.add(handGroup);
+scene.add(camera);
+
+/* ================= ENVIRONMENT ================= */
+const sun = new THREE.Mesh(new THREE.SphereGeometry(12, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffdd44 }));
+const moon = new THREE.Mesh(new THREE.SphereGeometry(10, 32, 32), new THREE.MeshBasicMaterial({ color: 0xeeeeee }));
+scene.add(sun); scene.add(moon);
+
+const starGeo = new THREE.BufferGeometry();
+const starPos = [];
+for(let i=0; i<100; i++) starPos.push((Math.random()-0.5)*2000, 200+Math.random()*400, (Math.random()-0.5)*2000);
+starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
+const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 1.2, transparent: true, opacity: 0 });
+const stars = new THREE.Points(starGeo, starMat); scene.add(stars);
+
+const cloudGroup = new THREE.Group();
+for(let i=0; i<10; i++) {
+    const cloud = new THREE.Mesh(new THREE.BoxGeometry(25, 2, 12), new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 }));
+    cloud.position.set((Math.random()-0.5)*1000, 100, (Math.random()-0.5)*1000);
+    cloudGroup.add(cloud);
+}
+scene.add(cloudGroup);
+
+const water = new THREE.Mesh(new THREE.PlaneGeometry(1000, 1000), new THREE.MeshPhongMaterial({ color: 0x004CA3, transparent: true, opacity: 0.5 }));
+water.rotation.x = -Math.PI/2; water.position.y = 4.2; scene.add(water);
+
+/* ================= WORLD GEN ================= */
+const blocks = [];
+const leafMat = getMat(0x228b22);
+
+function addBlock(x, y, z, mat) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mat);
+    b.position.set(x, y, z);
+    scene.add(b);
+    blocks.push(b);
+    return b;
+}
+
+function makeTree(x, y, z) {
+    const trunkHeight = 4 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < trunkHeight; i++) addBlock(x, y + i, z, items.wood.mat);
+    const leafBase = y + trunkHeight - 2;
+    for (let lx = -2; lx <= 2; lx++) {
+        for (let lz = -2; lz <= 2; lz++) {
+            for (let ly = 0; ly <= 2; ly++) {
+                if (Math.abs(lx) === 2 && Math.abs(lz) === 2 && ly > 0) continue;
+                if (ly === 2 && (Math.abs(lx) > 1 || Math.abs(lz) > 1)) continue;
+                if (lx === 0 && lz === 0 && ly < 2) continue;
+                addBlock(x + lx, leafBase + ly, z + lz, leafMat);
+            }
+        }
+    }
+}
+
+for (let x = -40; x < 40; x++) {
+    for (let z = -40; z < 40; z++) {
+        let h = Math.floor(Math.sin(x * 0.1) * 2 + Math.cos(z * 0.1) * 2) + 6;
+        for (let y = 0; y < h - 1; y++) addBlock(x, y, z, items.sand.mat);
+        addBlock(x, h - 1, z, items.grass.mat);
+        if (Math.random() < 0.015 && x % 4 === 0 && z % 4 === 0) makeTree(x, h, z);
+    }
+}
+
+/* ================= CONTROLS & ANIMATION LOGIC ================= */
+const gameBody = document.getElementById('gameBody');
+function lockCursor() { if(!paused) gameBody.requestPointerLock(); }
+document.addEventListener('pointerlockchange', () => {
+    gameBody.classList.toggle('menu-active', document.pointerLockElement !== gameBody);
+});
+gameBody.onclick = lockCursor;
+
+camera.position.set(0, 15, 25);
+let yaw=0, pitch=0, velY=0, gameTime=0, punchTime=0;
+let keys = {};
+
+window.onmousedown = (e) => {
+    if(paused || document.pointerLockElement !== gameBody) return;
+    
+    punchTime = 1.0; // Trigger punch animation
+
+    const ray = new THREE.Raycaster(); ray.setFromCamera({x:0, y:0}, camera);
+    const hit = ray.intersectObjects(blocks);
+    if(hit.length > 0) {
+        if(e.button === 0) {
+            scene.remove(hit[0].object);
+            blocks.splice(blocks.indexOf(hit[0].object), 1);
+        } else if(e.button === 2) {
+            let item = hotbarData[selected];
+            if(item && item.count > 0) {
+                let pos = hit[0].object.position.clone().add(hit[0].face.normal);
+                addBlock(pos.x, pos.y, pos.z, items[item.id].mat);
+                item.count--; if(item.count <= 0) hotbarData[selected] = null;
+                updateUI();
+            }
+        }
+    }
+};
+
+document.addEventListener("keydown", (e) => {
+    if(e.code === "KeyE") toggleInventory();
+    if(e.code === "Escape") togglePause();
+    if(!paused && e.key >= 1 && e.key <= 9) { selected = e.key - 1; updateUI(); }
+    keys[e.code] = true;
+});
+document.addEventListener("keyup", (e) => keys[e.code] = false);
+
+document.addEventListener("mousemove", (e) => {
+    if(document.pointerLockElement === gameBody && !paused) {
+        const sens = parseFloat(document.getElementById("sensSlider").value);
+        yaw -= e.movementX * sens; 
+        pitch = Math.max(-1.5, Math.min(1.5, pitch - e.movementY * sens));
+        camera.rotation.set(pitch, yaw, 0, 'YXZ');
+    }
+});
+
+/* ================= UI LOGIC ================= */
+function updateUI() {
+    const hb = document.getElementById("hotbar"); hb.innerHTML = "";
+    hotbarData.forEach((item, i) => {
+        const slot = document.createElement("div"); slot.className = `slot ${i === selected ? 'active' : ''}`;
+        if(item) {
+            let bg = items[item.id].img ? `url(${items[item.id].img})` : `none`;
+            slot.innerHTML = `<div class="item-icon" style="background-image:${bg}; background-color:#${items[item.id].mat.color.getHexString()}"></div><span class="count">${item.count}</span>`;
+        }
+        hb.appendChild(slot);
+    });
+    
+    // Update Held Block Texture
+    if(hotbarData[selected]) {
+        heldBlock.visible = true;
+        heldBlock.material = items[hotbarData[selected].id].mat;
+    } else {
+        heldBlock.visible = false;
+    }
+    renderInvGrids();
+}
+
+function renderInvGrids() {
+    const mainGrid = document.getElementById("mainInv"); const hbGrid = document.getElementById("hotbarInv");
+    mainGrid.innerHTML = ""; hbGrid.innerHTML = "";
+    mainInvData.forEach((it, i) => mainGrid.appendChild(createSlotUI(it, 'main', i)));
+    hotbarData.forEach((it, i) => hbGrid.appendChild(createSlotUI(it, 'hotbar', i)));
+}
+
+function createSlotUI(item, type, index) {
+    const slot = document.createElement("div"); slot.className = "slot";
+    slot.ondragover = (e) => e.preventDefault();
+    slot.ondrop = (e) => drop(e, type, index);
+    if(item) {
+        let bg = items[item.id].img ? `url(${items[item.id].img})` : `none`;
+        slot.innerHTML = `<div draggable="true" ondragstart="drag(event, '${type}', ${index})" class="item-icon" style="background-image:${bg}; background-color:#${items[item.id].mat.color.getHexString()}"></div><span class="count">${item.count}</span>`;
+    }
+    return slot;
+}
+
+function toggleInventory() { paused = !paused; document.getElementById("inventoryScreen").style.display = paused ? "block" : "none"; if(paused) document.exitPointerLock(); else lockCursor(); updateUI(); }
+function togglePause() { paused = !paused; document.getElementById("pauseMenu").style.display = paused ? "block" : "none"; document.getElementById("settingsPanel").style.display = "none"; if(paused) document.exitPointerLock(); else lockCursor(); }
+function resumeGame() { togglePause(); }
+function openSettings() { document.getElementById("pauseMenu").style.display="none"; document.getElementById("settingsPanel").style.display="block"; }
+function closeSettings() { document.getElementById("settingsPanel").style.display="none"; document.getElementById("pauseMenu").style.display="block"; }
+
+/* ================= ANIMATION LOOP ================= */
+function animate() {
+    requestAnimationFrame(animate);
+    if(!paused) {
+        // Clouds
+        cloudGroup.children.forEach(c => { c.position.x += 0.05; if(c.position.x > 500) c.position.x = -500; });
+
+        // Day-Night
+        gameTime += parseFloat(document.getElementById("speedSlider").value);
+        let sunX = Math.cos(gameTime) * 500, sunY = Math.sin(gameTime) * 500;
+        sun.position.set(sunX, sunY, -100); moon.position.set(-sunX, -sunY, -100);
+        sunLight.position.set(sunX, sunY, -100);
+        let dayFactor = Math.sin(gameTime);
+        sunLight.intensity = Math.max(0, dayFactor * 1.5);
+        starMat.opacity = Math.max(0, -dayFactor);
+        scene.background = new THREE.Color(0x87ceeb).lerp(new THREE.Color(0x000011), Math.max(0, -dayFactor + 0.5));
+
+        // Hand Punch Animation
+        if(punchTime > 0) {
+            punchTime -= 0.12;
+            handGroup.position.z = Math.sin(punchTime * Math.PI) * 0.5;
+            handGroup.rotation.y = Math.sin(punchTime * Math.PI) * -0.2;
+        } else {
+            punchTime = 0;
+            handGroup.position.z = 0;
+            handGroup.rotation.y = 0;
+        }
+
+        // Movement
+        const d = new THREE.Vector3(); camera.getWorldDirection(d); d.y = 0; d.normalize();
+        const r = new THREE.Vector3().crossVectors(camera.up, d).normalize();
+        if(keys.KeyW) camera.position.add(d.clone().multiplyScalar(0.2));
+        if(keys.KeyS) camera.position.add(d.clone().multiplyScalar(-0.2));
+        if(keys.KeyA) camera.position.add(r.clone().multiplyScalar(0.2));
+        if(keys.KeyD) camera.position.add(r.clone().multiplyScalar(-0.2));
+        velY -= 0.01; camera.position.y += velY;
+        if(camera.position.y < 12) { camera.position.y = 12; velY = 0; }
+        if(keys.Space && camera.position.y <= 12.1) velY = 0.22;
+    }
+    renderer.render(scene, camera);
+}
+
+let dragSrc = null;
+function drag(e, type, index) { dragSrc = {type, index}; }
+function drop(e, toType, toIndex) {
+    e.preventDefault();
+    let fromArr = dragSrc.type === 'main' ? mainInvData : hotbarData;
+    let toArr = toType === 'main' ? mainInvData : hotbarData;
+    [fromArr[dragSrc.index], toArr[toIndex]] = [toArr[toIndex], fromArr[dragSrc.index]];
+    updateUI();
+}
+function dropToTrash(e) { let fromArr = dragSrc.type === 'main' ? mainInvData : hotbarData; fromArr[dragSrc.index] = null; updateUI(); }
+
+updateUI(); animate();
+window.oncontextmenu = (e) => e.preventDefault();
+</script>
+</body>
+</html>
