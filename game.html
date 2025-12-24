@@ -1,13 +1,25 @@
 <!DOCTYPE html>
-<html>
+<html>  
 <head>
     <meta charset="UTF-8">
     <title>MiniCraft</title>
+      <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+      
     <style>
+        * { box-shadow: none; text-shadow: none; }
         body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Arial, sans-serif; cursor: none; user-select: none; }
         #cross { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-size: 24px; z-index: 10; pointer-events: none; }
         .menu-active { cursor: default !important; }
         .menu-active #cross { display: none; }
+
+        /* loadingScreen */
+        #mcLoader{ position:fixed; inset:0; background:#000; display:flex; justify-content:center; align-items:center; z-index:9999; font-family: monospace; }
+        .mc-box{ text-align:center; padding:30px 40px; border:4px solid #555; background:#111; }
+        .mc-box h1{ font-size:56px; font-family: 'VT323', monospace; letter-spacing:6px; margin:0 0 10px; color:#7dbb4c; }
+        .mc-box p{ margin:10px 0 20px; color:#ccc; font-size:14px; }
+        .mc-bar{ width:280px; height:22px; border:3px solid #555; background:#222; margin-bottom:10px; }
+        #mcProgress{ height:100%; width:0%; background:#7dbb4c; image-rendering: pixelated; }
+        #mcPercent{ font-size:14px; color:#aaa; }
 
         /* Hotbar */
         #hotbar { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 4px; background: rgba(0,0,0,0.7); padding: 6px; border: 2px solid #444; z-index: 10; }
@@ -29,6 +41,20 @@
     </style>
 </head>
 <body id="gameBody">
+
+<div id="mcLoader">
+  <div class="mc-box">
+    <h1>SkyBlock</h1>
+    <p>Loading...</p>
+
+    <div class="mc-bar">
+      <div id="mcProgress"></div>
+    </div>
+
+    <span id="mcPercent">0%</span>
+  </div>
+</div>
+
 
 <div id="cross">+</div>
 <div id="panel"><b>Player & Controls</b><br>E: Inventory | ESC: Settings<br>L-Click: Break | R-Click: Place<br> WASD movement<br>Spcae: Jump | Hotbar (1–9 keys)</div>
@@ -62,8 +88,23 @@
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script>
+    /* loadingScreen */
+const loadingManager = new THREE.LoadingManager();
+
+loadingManager.onProgress = (url, loaded, total) => {
+  const percent = Math.floor((loaded / total) * 100);
+  document.getElementById("mcProgress").style.width = percent + "%";
+  document.getElementById("mcPercent").innerText = percent + "%";
+};
+
+loadingManager.onLoad = () => {
+  setTimeout(()=>{
+    document.getElementById("mcLoader").style.display = "none";
+  }, 300);
+};
+
 /* ================= ASSETS & CONFIG ================= */
-const loader = new THREE.TextureLoader();
+const loader = new THREE.TextureLoader(loadingManager);
 const textures = {
     grass: 'https://threejs.org/examples/textures/minecraft/grass.png',
     wood: 'https://threejs.org/examples/textures/crate.gif'
@@ -92,7 +133,7 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000);
 const renderer = new THREE.WebGLRenderer({ antialias: false });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
@@ -122,20 +163,20 @@ scene.add(sun); scene.add(moon);
 
 const starGeo = new THREE.BufferGeometry();
 const starPos = [];
-for(let i=0; i<100; i++) starPos.push((Math.random()-0.5)*2000, 200+Math.random()*400, (Math.random()-0.5)*2000);
+for(let i=0; i<30; i++) starPos.push((Math.random()-0.5)*2000, 200+Math.random()*400, (Math.random()-0.5)*2000);
 starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
 const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 1.2, transparent: true, opacity: 0 });
 const stars = new THREE.Points(starGeo, starMat); scene.add(stars);
 
 const cloudGroup = new THREE.Group();
-for(let i=0; i<10; i++) {
+for(let i=0; i<5; i++) {
     const cloud = new THREE.Mesh(new THREE.BoxGeometry(25, 2, 12), new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 }));
     cloud.position.set((Math.random()-0.5)*1000, 100, (Math.random()-0.5)*1000);
     cloudGroup.add(cloud);
 }
 scene.add(cloudGroup);
 
-const water = new THREE.Mesh(new THREE.PlaneGeometry(1000, 1000), new THREE.MeshPhongMaterial({ color: 0x004CA3, transparent: true, opacity: 0.5 }));
+const water = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshPhongMaterial({ color: 0x004CA3, transparent: true, opacity: 0.45 }));
 water.rotation.x = -Math.PI/2; water.position.y = 4.2; scene.add(water);
 
 /* ================= WORLD GEN ================= */
